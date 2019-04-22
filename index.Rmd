@@ -1,0 +1,245 @@
+---
+title: <center> <h1>Cliff Jumping</h1> </center>
+author: <center>Papa Beye, Leo Schivarian, Chihab Khnifass et Cyprien Neverov</center>
+date: <center>April 12, 2019</center>
+output: 
+  html_document:
+    toc: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(viridis)
+library(plotly)
+library(installr)
+library(rjson)
+library(stringr)
+library(ggmap)
+library(maps)
+library(rworldmap)
+library(grid)
+library(knitr)
+library(countrycode)
+```
+
+Le **Cliff jumping** ou le **Cliff diving** est un sport dérivé du plongeon artistique qui consiste à sauter d'endroits non-aménagés dans l'eau en faisant des figures, c'est en quelque sorte du plongeon artistique freestyle. Depuis quelques années cette pratique gagne en popularité et certains deviennent des pratiquants professionnels. 
+
+<center>
+![Robert Wall est un des plus connus](https://scontent-mrs1-1.xx.fbcdn.net/v/t1.0-9/14516314_382148021909285_1211131803923170454_n.jpg?_nc_cat=111&_nc_ht=scontent-mrs1-1.xx&oh=f798cd67dfd450eb308c40b98fd8f21a&oe=5D4E5E41)
+</center>
+
+## Introduction
+
+Comme tout sport moderne, la communauté du cliff jumping est très active sur Instagram et s'en sert d'espace de partage et de d'echange. L'idée de cette étude est de visualiser l'origine des posts Instagram utilisant l'hashtag. C'est un hashtag qui reçoit beaucoup d'engagement de la part du public, c'est à dire que les utilisateurs ont beaucoup tendance à aller voir, liker et commenter les photos et vidéos qui l'utilisent. 
+
+### Données
+
+Pour rassembler les donnes, nous avons utilise [`instagram-scraper`](https://github.com/rarcega/instagram-scraper), c'est un programme Python qui permet de collecter des donnes sur Instagram en ligne de commande et qui génère un fichier JSON à la sortie. Nous avons donc récolté les métadonnées des 1000 premières images ou vidéos mentionnant le hashtag. 
+
+Cette méthode nous fournit le nom de l'endroit, et l'id interne à instagram, nous avons donc besoin de transformer cette information en coordonnées. Cette opération s'appelle le géocodage, il existe une fonction `geocode()` du package `ggmap` qui sert justement à ca. Mais le problème est qu'elle fait appel aux API de Google qui sont payants. Nous allons donc utiliser le service de [OpenStreetMap](https://developer.mapquest.com/documentation/open/nominatim-search/) qui est gratuit et qui donne des resultats satisfaisants.
+Nous créons donc notre fonction `diy_geocode()`:
+
+```{r eval=FALSE}
+diy_geocode <- function(name) {
+  #On fait une premiere requette avec le nom entier
+  path <- paste("http://open.mapquestapi.com/nominatim/v1/search.php?key=z4mPoNzcMnTLfJZlAWm59bvjqhpHnTta&format=json&osm_type=N&limit=1&q=", name)
+  coordinates <- fromJSON(file = path)
+  #Si ca ne marche pas on fait un deuxieme essai en prenant que des parties du nom
+  i <- 1
+  names <- str_split(name,",",simplify = TRUE)
+  while (is.empty(coordinates) && length(names) > i) {
+    path <- paste("http://open.mapquestapi.com/nominatim/v1/search.php?key=z4mPoNzcMnTLfJZlAWm59bvjqhpHnTta&format=json&osm_type=N&limit=1&q=", toString(names[,i]))
+    coordinates <- fromJSON(file = path)
+    i <- i+1
+  }
+  return(coordinates)
+}
+```
+
+Une fois que nous avons la fonction de géocodage on peut l'appliquer à nos données.
+
+```{r eval=FALSE}
+#On ouvre le JSON
+result <- fromJSON(file = "cliffjumping.json")
+
+#On cree un nouveau dataframe
+data <- data.frame("Name" = c("Finestret"), "lat" = c(42.611622), "lon" = c(2.510642), "country" = c("FR"), stringsAsFactors = FALSE)
+
+#On traite tout les elemets
+for (k in 1:1000) {
+  media <- result$GraphImages[[k]]
+  name <- media$location$name
+  name <- str_remove(name, "[#]") #on enleve les symboles genants
+  #Certaines publications ne specifient pas d'emplacement 
+  if (!is.empty(name)) {
+    #On garde l code iso du pays pour faire un diagramme
+    country <- media$location$address_json
+    if (!is.null(country)) {
+      country <- fromJSON(country)
+      country <- country$country_code
+    } else {
+      country <- "?"
+    }
+    #On geocode
+    coordinates <- diy_geocode(name)
+    
+    #Si le geocodeur n'a toujours rien trouve on donne (0,0) comme coordonees.
+    if (is.empty(coordinates)) {
+      data <- rbind(data,list(name,0,0,"?"))
+    } else {
+      data <- rbind(data,list(name,as.double(coordinates[[1]]$lat),as.double(coordinates[[1]]$lon), country))
+    }
+  }
+}
+#On enregistre nos donnees
+write.csv(data, "cliffjumping.csv")
+```
+
+
+```{r echo = FALSE}
+data <- read.csv(file="cliffjumping.csv")
+kable(data[3:8,], caption="Rendu du script de geocodage")
+```
+
+On peut remarquer que certains endroits ne sont pas du tout reconnus par le géocodeur. Par exemple "Buchenegger Wasserfälle" a (0,0) comme coordonnées.  Sur nos 1000 éléments du JSON nous en avons 606 qui précisent un emplacement et parmi ces 606 il y en a 123 qui ne sont pas reconnus par le géocodeur. Si on regarde ces endroits de plus près, on se rend compte qu'il s'agit souvent d'établissement touristiques privés, nous perdons donc pas beaucoup d'information en les ignorant.
+
+```{r echo = FALSE}
+data <- read.csv(file="cliffjumping.csv")
+kable(data[31:32,], caption="Endroits non reconnus par le geocodeur")
+```
+
+## Analyse
+
+L'idéal pour nous serait d'avoir une carte qui rassemble tous les spots sur terre ou on peut sauter. Or, avec la méthode que nous avons suivi nous sommes loin de ce résultat. En effet, la localisation publiée par les utilisateurs correspond à la ville la plus proche au mieux et au pays au pire. Puis cette information est traitée par le géocodeur qui peut très bien se tromper. Par exemple, il existe un café en Jamaïque qui se trouve sur des rochers juste au bord de la mer, avec un petit pont pour sauter. Ce café s'appelle ["Rick's Cafe"](https://www.tripadvisor.fr/Attraction_Review-g147313-d149415-Reviews-Rick_s_Cafe-Negril_Westmoreland_Parish_Jamaica.html) or, une fois passé par le géocodeur nous avons des coordonnées qui pointent sur le centre ville de Londres. La morale est qu'il faut regarder sur ces données avec du recul. Elles peuvent surtout nous donner une idée des régions du monde ou les gens ont tendance à pratiquer le cliff jumping.
+
+### Cartes
+
+```{r  fig.align="center"}
+data %>%
+  filter(lat != 0) %>%
+  ggplot( aes(x = lon, y = lat)) +
+    borders("world", colour="#b5b5b5", fill="#b5b5b5") +
+    geom_point(color = "#3c5887")+
+      theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+En observant la carte du monde on peut d'ores et déjà distinguer trois zones principales: Amérique du Nord, Europe et Asie du Sud/Océanie. Ce qui est assez logique puisque l'hashtag est en anglais. On peut aussi remarquer que l'Amérique du Sud est très peu représentée, ce qui est assez étonnant vu le climat et la géographie du continent. Les concentrations sur Hawaii et les Philippines ne sont pas étonnantes puisque ce sont des îles avec des températures de baignade durant toute l'année et une géologie est propice à la formation de côtes rocheuses. 
+
+
+```{r echo = FALSE, fig.align="center"}
+# Get the world map
+worldMap <- getMap()
+
+# Member States of the European Union
+europeanUnion <- c("Austria","Belgium","Bulgaria","Croatia","Cyprus",
+                   "Czech Rep.","Denmark","Estonia","Finland","France",
+                   "Germany","Greece","Hungary","Ireland","Italy","Latvia",
+                   "Lithuania","Luxembourg","Malta","Netherlands","Poland",
+                   "Portugal","Romania","Slovakia","Slovenia","Spain",
+                   "Sweden","Swiss","United Kingdom")
+# Select only the index of states member of the E.U.
+indEU <- which(worldMap$NAME%in%europeanUnion)
+
+
+# Extract longitude and latitude border's coordinates of members states of E.U. 
+europeCoords <- lapply(indEU, function(i){
+  df <- data.frame(worldMap@polygons[[i]]@Polygons[[1]]@coords)
+  df$region =as.character(worldMap$NAME[i])
+  colnames(df) <- list("long", "lat", "region")
+  return(df)
+})
+
+europeCoords <- do.call("rbind", europeCoords)
+
+
+# Add some data for each member
+value <- sample(x = seq(0,3,by = 0.1), size = length(europeanUnion),
+                replace = TRUE)
+europeanUnionTable <- data.frame(country = europeanUnion, value = value)
+europeCoords$value <- europeanUnionTable$value[match(europeCoords$region,europeanUnionTable$country)]
+
+
+data %>%
+  filter(lat != 0) %>%
+  filter(lon < 30) %>%
+  filter(lon > -15 ) %>%
+  filter(lat >25) %>%
+  
+  ggplot(aes(x = lon, y = lat)) + geom_polygon(data = europeCoords, aes(x = long, y = lat, group = region),
+                              fill = "#b5b5b5", colour = "#b5b5b5", size = 0.1) +
+    coord_map(xlim = c(-13, 35),  ylim = c(32, 71)) +     
+    geom_point(color = "#3c5887") +
+    theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+### Classements
+
+Maintenant voyons quels sont les pays les plus représentés. Nous utilisons la fonction `countrycode()` qui permet de jongler entre les noms des pays et les désignations ISO2 et ISO3.
+
+```{r warning = FALSE}
+#On passe du iso2 au vrai nom
+dfpays <- data.frame(table(data$country))
+dfpays$Var1 <- countrycode(dfpays$Var1, "iso2c", "country.name")
+dfpays %>%
+  filter(!is.na(Var1)) %>%
+  arrange(Freq) %>%
+  tail(20) %>%
+  mutate(Var1=factor(Var1, Var1)) %>%
+  ggplot( aes(x=Var1, y=Freq) ) +
+    geom_segment( aes(x=Var1 ,xend=Var1, y=0, yend=Freq), color="grey") +
+    geom_point(size=3, color="#69b3a2") +
+    coord_flip() +
+    theme_ipsum() +
+    theme(
+      plot.title = element_text(size=12),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position="center"
+    ) +
+    labs(title="Nombre d'utilisation de l'hashtag par pays",x = "", y = "Nombre d'hashtags")
+```
+
+Il n'est pas étonnant de voir que les USA sont en tête. Par contre le fait que les Philippines soient en deuxième position s'explique par un événement qui a eu lieu récemment (13 avril, et nous avons scrappé le 14) à El Nido dans la province de Palawan : le [Red Bull Cliff Diving](https://cliffdiving.redbull.com). C'est une compétition de cliff diving un peu plus "académique" qui ressemble au plongeon artistique des J.O. mais la hauteur des sauts est largement supérieure (27m-34m). Vu que nous avons scrappé le 1000 dernières publications il est logique d'en retrouver beaucoup dans les Philippines.
+
+```{r warning = FALSE, echo = FALSE}
+dfspot <- data.frame(table(data$Name))
+dfspot %>%
+  filter(!is.na(Var1)) %>%
+  arrange(Freq) %>%
+  tail(20) %>%
+  mutate(Var1=factor(Var1, Var1)) %>%
+  ggplot( aes(x=Var1, y=Freq) ) +
+    geom_segment( aes(x=Var1 ,xend=Var1, y=0, yend=Freq), color="grey") +
+    geom_point(size=3, color="#69b3a2") +
+    coord_flip() +
+    theme_ipsum() +
+    theme(
+      plot.title = element_text(size=12),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position="center"
+    ) +
+    labs(title="Les spots les plus populaires",x = "", y = "Nombre d'hashtags")
+```
+
+Voici un lolipop plot qui montre les spots les plus populaires. 
+
+## Conclusion
+
+Les trois étapes clés de ce rapport sont: le scrapping, le géocodage et la visualisation. La plus difficile des trois c'est de loin le géocodage, la preuve: nous avons besoin de faire appel à un serveur pour qu'il traite les données à notre place.  
+Nous aboutissons à un résultat assez intéressant mais limité, nous aurions envie d'avoir de donnees plus precises et plus riches. Enfin, notre méthode reste reproductible pour n'importe quel autre hashtag. 
+
