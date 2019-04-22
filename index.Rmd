@@ -1,6 +1,6 @@
 ---
 title: <center> <h1>Cliff Jumping</h1> </center>
-author: <center>Papa Beye, Leo Schivarian, Chihab Khnifass et Cyprien Neverov</center>
+author: <center>Papa Beye, Leo Schirvanian, Chihab Khnifass et Cyprien Neverov</center>
 date: <center>April 12, 2019</center>
 output: 
   html_document:
